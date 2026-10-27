@@ -47,6 +47,7 @@ class ExportSqlTest(unittest.TestCase):
         self.assertIn("ENABLE ROW LEVEL SECURITY", schema)
         self.assertIn("FOR SELECT TO anon, authenticated USING (true)", schema)
         self.assertLess(schema.index("DROP VIEW"), schema.index("DROP TABLE"))
+        self.assertNotIn("CREATE VIEW", schema)  # 테이블 하나만 만든다
         self.assertEqual(files["02_data_1.sql"].count("INSERT INTO"), 6)  # 3000행 / 500
         self.assertEqual(files["02_data_2.sql"].count("INSERT INTO"), 2)
         self.assertEqual(files["all.sql"], "".join(files[k] for k in sorted(files) if k != "all.sql"))

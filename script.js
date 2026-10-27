@@ -36,6 +36,14 @@ const DETAIL_FIELDS = [
   ["source", "자료 출처"],
 ];
 
+// 시도 선택 목록 (행정구역 순서). 데이터가 없는 시도를 고르면 "결과 없음" 으로 나온다.
+const SIDO_LIST = [
+  "서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시", "대전광역시", "울산광역시",
+  "세종특별자치시", "경기도", "강원특별자치도", "충청북도", "충청남도", "전북특별자치도", "전라남도",
+  "경상북도", "경상남도", "제주특별자치도",
+];
+const MAX_ROWS = 1000;  // Supabase 가 한 번에 돌려주는 최대 행 수
+
 const $ = (id) => document.getElementById(id);
 const els = {
   form: $("filters"), q: $("q"), sido: $("sido"), sigungu: $("sigungu"), sort: $("sort"),
@@ -45,7 +53,7 @@ const els = {
 };
 
 const state = { q: "", sido: "", sigungu: "", sort: "name", page: 0, total: 0 };
-let regions = [];          // [{sido, sigungu, reservoir_count}]
+const sigunguCache = new Map();  // 시도 -> [{sigungu, count}]
 let pending = null;        // 진행 중인 요청 (새 검색이 시작되면 취소)
 
 // ---------- Supabase REST 호출 ----------
@@ -192,30 +200,50 @@ async function loadList() {
   }
 }
 
-async function loadRegions() {
-  try {
-    const { data } = await api("reservoir_region_counts", [["select", "sido,sigungu,reservoir_count"]]);
-    regions = data;
-  } catch {
-    regions = [];  // 지역 목록이 없어도 검색은 되게 둔다
-  }
-  const sidos = [...new Set(regions.map((r) => r.sido).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ko"));
+function fillSido() {
   els.sido.replaceChildren(el("option", { value: "", textContent: "전체" }),
-    ...sidos.map((s) => el("option", { value: s, textContent: s })));
-  els.sido.value = sidos.includes(state.sido) ? state.sido : "";
+    ...SIDO_LIST.map((s) => el("option", { value: s, textContent: s })));
+  els.sido.value = SIDO_LIST.includes(state.sido) ? state.sido : "";
   state.sido = els.sido.value;
-  fillSigungu();
 }
 
-function fillSigungu() {
-  const list = regions.filter((r) => r.sido === state.sido && r.sigungu)
+// 고른 시도의 시군구와 저수지 개수를 reservoirs 테이블에서 직접 센다 (시도별로 한 번만)
+async function loadSigungu(sido) {
+  if (sigunguCache.has(sido)) return sigunguCache.get(sido);
+  const counts = new Map();
+  for (let offset = 0; ; offset += MAX_ROWS) {
+    const { data } = await api("reservoirs", [["select", "sigungu"], ["sido", `eq.${sido}`],
+      ["order", "sigungu.asc,id.asc"], ["offset", String(offset)], ["limit", String(MAX_ROWS)]]);
+    for (const { sigungu } of data) if (sigungu) counts.set(sigungu, (counts.get(sigungu) || 0) + 1);
+    if (data.length < MAX_ROWS) break;
+  }
+  const list = [...counts].map(([sigungu, count]) => ({ sigungu, count }))
     .sort((a, b) => a.sigungu.localeCompare(b.sigungu, "ko"));
+  sigunguCache.set(sido, list);
+  return list;
+}
+
+async function fillSigungu() {
+  const sido = state.sido;
+  els.sigungu.disabled = true;
+  els.sigungu.replaceChildren(el("option", { value: "", textContent: sido ? "불러오는 중…" : "전체" }));
+  if (!sido) return;
+  let list = [];
+  try {
+    list = await loadSigungu(sido);
+  } catch {
+    // 시군구 목록을 못 불러와도 시도 검색은 되게 둔다
+  }
+  if (state.sido !== sido) return;  // 그사이 다른 시도를 골랐으면 버린다
   els.sigungu.replaceChildren(el("option", { value: "", textContent: "전체" }),
     ...list.map((r) => el("option", { value: r.sigungu,
-      textContent: `${r.sigungu} (${Number(r.reservoir_count).toLocaleString("ko-KR")})` })));
-  els.sigungu.disabled = !state.sido;
+      textContent: `${r.sigungu} (${r.count.toLocaleString("ko-KR")})` })));
+  els.sigungu.disabled = !list.length;
   els.sigungu.value = list.some((r) => r.sigungu === state.sigungu) ? state.sigungu : "";
-  state.sigungu = els.sigungu.value;
+  if (list.length && state.sigungu && !els.sigungu.value) {  // 주소창의 시군구가 목록에 없으면 해제
+    state.sigungu = "";
+    update();
+  }
 }
 
 async function showDetail(id) {
@@ -304,4 +332,6 @@ els.next.addEventListener("click", () => { state.page++; update({ resetPage: fal
 els.detail.addEventListener("click", (e) => { if (e.target === els.detail) els.detail.close(); });
 
 readUrl();
-loadRegions().then(() => update({ resetPage: false }));
+fillSido();
+fillSigungu();
+update({ resetPage: false });

@@ -1,6 +1,7 @@
 -- 전국 저수지 목록: Supabase 테이블 만들기 (scripts/export_sql.py 로 생성)
 -- 1) 이 파일 -> 2) 02_data_1.sql ~ 02_data_5.sql 순서로 SQL Editor 에서 실행하세요.
 -- 주의: reservoirs 테이블이 이미 있으면 지우고 새로 만듭니다.
+-- 예전 버전이 만들던 뷰가 남아 있으면 지운다 (지금은 테이블 하나만 사용)
 DROP VIEW IF EXISTS reservoir_region_counts;
 DROP TABLE IF EXISTS reservoirs;
 CREATE TABLE reservoirs (
@@ -57,9 +58,3 @@ ALTER TABLE reservoirs ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "reservoirs are readable by everyone" ON reservoirs
   FOR SELECT TO anon, authenticated USING (true);
 GRANT SELECT ON reservoirs TO anon, authenticated;
-
--- 시도·시군구 선택 목록용 개수 (security_invoker: 조회하는 사람의 권한·RLS 적용)
-CREATE VIEW reservoir_region_counts WITH (security_invoker = true) AS
-  SELECT sido, sigungu, count(*) AS reservoir_count FROM reservoirs
-  GROUP BY sido, sigungu;
-GRANT SELECT ON reservoir_region_counts TO anon, authenticated;

@@ -13,7 +13,7 @@ reservoirs 테이블이 새로 만들어진다. 이미 있으면 지우고 다�
 
 supabase 는 PostgreSQL 스크립트에 아래를 더하고, SQL Editor 에 붙여넣기 좋게 파일을 나눈다.
   * RLS 를 켜고 누구나(anon) 읽기만 할 수 있는 정책 -> 홈페이지에서 공개 키로 바로 조회 가능
-  * 이름 부분검색용 pg_trgm 인덱스, 시도·시군구별 개수 뷰(reservoir_region_counts)
+  * 이름 부분검색용 pg_trgm 인덱스 (테이블은 reservoirs 하나만 만든다)
   * 01_schema.sql, 02_data_1.sql ... (SUPABASE_ROWS_PER_FILE 행씩), 전체를 합친 all.sql,
     Table Editor 의 CSV 가져오기용 reservoirs.csv(영문 헤더)
 """
@@ -109,12 +109,6 @@ def create_table(dialect: str) -> list[str]:
             f'CREATE POLICY "reservoirs are readable by everyone" ON {TABLE}',
             "  FOR SELECT TO anon, authenticated USING (true);",
             f"GRANT SELECT ON {TABLE} TO anon, authenticated;",
-            "",
-            "-- 시도·시군구 선택 목록용 개수 (security_invoker: 조회하는 사람의 권한·RLS 적용)",
-            "CREATE VIEW reservoir_region_counts WITH (security_invoker = true) AS",
-            f"  SELECT sido, sigungu, count(*) AS reservoir_count FROM {TABLE}",
-            "  GROUP BY sido, sigungu;",
-            "GRANT SELECT ON reservoir_region_counts TO anon, authenticated;",
         ]
     return sql
 
@@ -150,7 +144,8 @@ def build_supabase_files(df: pd.DataFrame) -> dict[str, str]:
         "-- 전국 저수지 목록: Supabase 테이블 만들기 (scripts/export_sql.py 로 생성)",
         f"-- 1) 이 파일 -> 2) 02_data_1.sql ~ 02_data_{parts}.sql 순서로 SQL Editor 에서 실행하세요.",
         f"-- 주의: {TABLE} 테이블이 이미 있으면 지우고 새로 만듭니다.",
-        f"DROP VIEW IF EXISTS reservoir_region_counts;",
+        "-- 예전 버전이 만들던 뷰가 남아 있으면 지운다 (지금은 테이블 하나만 사용)",
+        "DROP VIEW IF EXISTS reservoir_region_counts;",
         *create_table("supabase"),
     ]) + "\n"}
     for n in range(parts):
