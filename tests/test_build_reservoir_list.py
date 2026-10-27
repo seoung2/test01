@@ -7,6 +7,11 @@ from pathlib import Path
 
 import pandas as pd
 
+try:
+    import xlwt
+except ImportError:
+    xlwt = None
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import build_reservoir_list as brl  # noqa: E402
 
@@ -49,6 +54,41 @@ class BuildReservoirListTest(unittest.TestCase):
         self.assertEqual(len(merged), 3)
         gana = merged[merged["시설코드"] == "A001"]
         self.assertEqual(gana["출처"].iloc[0], "한국농어촌공사")
+
+    def test_merge_keeps_same_name_within_one_source(self):
+        same = pd.concat([KRC.iloc[[0]], KRC.iloc[[0]].assign(표준시설코드="A009")])
+        merged = brl.merge_sources([brl.standardize(same, "한국농어촌공사")])
+        self.assertEqual(len(merged), 2)
+
+    @unittest.skipUnless(xlwt, "xlwt 가 없으면 .xls 테스트 파일을 만들 수 없음")
+    def test_small_reservoir_xls(self):
+        rows = [
+            ["전국 시군구 관리 소규모 저수지 현황"],
+            ["관리번호", "시설명", "위치", "", "", "", "설치년도"],
+            ["", "", "시도", "시군구", "읍면", "동리", "착공", "준공"],
+            [],
+            ["가상", 3],  # 시도 소계 행
+            [1, "가나", "경북", "가상", "가면", "가리", 1960, 1961, 10, 2, "", 1.5, 0.4, 90, 3, 50],
+            [2, "가나", '"', "〃", "나면", "나리", "", 1945, 5, 1, "", 0.5, 0.2],
+            [3, "다라", "포항시", "북구", "다면", "다리", "", "", 7, 1, "", 0.7],
+            ["소계", 3],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "small.xls"
+            book = xlwt.Workbook()
+            sheet = book.add_sheet("최종")
+            for r, row in enumerate(rows):
+                for c, value in enumerate(row):
+                    sheet.write(r, c, value)
+            book.save(str(path))
+            df = brl.read_small_reservoir_xls(path)
+        self.assertEqual(list(df["시설명"]), ["가나", "가나", "다라"])
+        self.assertEqual(list(df["시도"]), ["경상북도"] * 3)
+        self.assertEqual(list(df["시군구"]), ["가상", "가상", "포항시 북구"])
+        self.assertEqual(df["지번주소"].iloc[1], "경상북도 가상 나면 나리")
+        self.assertEqual(df["유효저수량"].iloc[0], 1.5)
+        self.assertEqual(df["준공연도"].iloc[0], "1961")
+        self.assertTrue(pd.isna(df["준공연도"].iloc[2]))
 
     def test_main_writes_outputs_from_cp949_csv(self):
         with tempfile.TemporaryDirectory() as tmp:

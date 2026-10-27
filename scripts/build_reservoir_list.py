@@ -7,12 +7,16 @@
   * 전국저수지및댐표준데이터 (지방자치단체 관리)
     https://www.data.go.kr/data/15139218/standard.do
 
+  * 전국 시군구 관리 소규모 저수지 현황 (행정안전부 계열 엑셀, 2007년경 작성)
+    3단 병합 헤더 + 시도/시군구 소계 행이 섞인 .xls 양식
+
 원본 파일은 기관·시점마다 컬럼명과 단위 표기가 조금씩 달라서, 컬럼은 동의어 목록으로
 찾고 단위는 헤더의 괄호 표기(예: "총저수량(천㎥)")를 읽어 천㎥ / ha 로 맞춘다.
 
 사용법:
     python scripts/build_reservoir_list.py \
-        --krc data/raw/krc_*.csv --std data/raw/std_*.csv --out-dir data
+        --krc data/raw/krc_*.csv --std data/raw/std_*.csv \
+        --small data/raw/소규모저수지현황.xls --out-dir data
 """
 
 from __future__ import annotations
@@ -37,6 +41,9 @@ COLUMN_SYNONYMS: dict[str, list[str]] = {
     "유효저수량": ["유효저수량"],
     "수혜면적": ["수혜면적", "몽리면적"],
     "유역면적": ["유역면적"],
+    "만수면적": ["만수면적"],
+    "제당높이": ["제당높이"],
+    "제당길이": ["제당길이"],
     "준공연도": ["준공연도", "준공년도", "축조연도", "축조년도"],
     "위도": ["위도"],
     "경도": ["경도"],
@@ -46,7 +53,7 @@ COLUMN_SYNONYMS: dict[str, list[str]] = {
 OUTPUT_COLUMNS = ["출처", *COLUMN_SYNONYMS]
 
 VOLUME_COLUMNS = ["총저수량", "유효저수량"]  # 천㎥ 로 통일
-AREA_COLUMNS = ["수혜면적", "유역면적"]  # ha 로 통일
+AREA_COLUMNS = ["수혜면적", "유역면적", "만수면적"]  # ha 로 통일
 
 # 단위 표기 -> 목표 단위로의 배율
 VOLUME_FACTORS = {"천㎥": 1, "천m3": 1, "천톤": 1, "만㎥": 10, "만m3": 10,
@@ -62,7 +69,14 @@ SIDO_ALIASES = {
     "충북": "충청북도", "충남": "충청남도", "전북": "전북특별자치도",
     "전라북도": "전북특별자치도", "전남": "전라남도", "경북": "경상북도",
     "경남": "경상남도", "제주": "제주특별자치도", "제주도": "제주특별자치도",
+    "울산시": "울산광역시", "충남도": "충청남도", "충북도": "충청북도",
 }
+# 시도 칸에 시 이름이 들어간 경우: 시 -> (시도, 시군구 앞에 붙일 이름)
+CITY_IN_SIDO = {
+    "포항": ("경상북도", "포항시"), "포항시": ("경상북도", "포항시"),
+    "전주": ("전북특별자치도", "전주시"), "전주시": ("전북특별자치도", "전주시"),
+}
+DITTO_CHARS = "\"'〃 "  # 이 문자만 있거나 빈칸이면 윗행과 같다는 뜻
 SIDO_SUFFIXES = ("특별시", "광역시", "특별자치시", "특별자치도", "통합특별시", "도")
 
 
@@ -96,7 +110,7 @@ def to_number(series: pd.Series) -> pd.Series:
 def normalize_sido(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         return ""
-    value = value.strip()
+    value = re.sub(r"\s+", "", value)
     return SIDO_ALIASES.get(value, value)
 
 
@@ -161,13 +175,85 @@ def standardize(raw: pd.DataFrame, source: str) -> pd.DataFrame:
     return out[OUTPUT_COLUMNS]
 
 
+def read_small_reservoir_xls(path: Path, source: str = "시군구(소규모)") -> pd.DataFrame:
+    """'전국 시군구 관리 소규모 저수지 현황' 엑셀을 표준 컬럼으로 읽는다.
+
+    헤더가 3행(2~4행)에 걸쳐 병합돼 있고, 시도·시군구 소계 행(시설명 칸에 개수)이
+    중간중간 섞여 있으며, 시도·시군구 칸은 '"', '〃' 나 빈칸으로 윗행 반복을 표시한다.
+    """
+    import xlrd
+
+    sheet = xlrd.open_workbook(str(path)).sheet_by_index(0)
+
+    def cell(row: int, col: int) -> object:
+        c = sheet.cell(row, col)
+        if c.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK, xlrd.XL_CELL_ERROR):
+            return None
+        return c.value.strip() if isinstance(c.value, str) else c.value
+
+    def number(value: object) -> float | None:
+        try:
+            return float(str(value).replace(",", "")) if value not in (None, "") else None
+        except ValueError:
+            return None
+
+    def text(value: object) -> str:
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return "" if value is None else str(value).strip()
+
+    records = []
+    sido = sigungu = ""
+    for row in range(4, sheet.nrows):
+        name = cell(row, 1)
+        if not isinstance(name, str) or not name:
+            continue  # 소계(시설명 칸이 숫자)·빈 행
+        raw_sido, raw_sigungu = text(cell(row, 2)), text(cell(row, 3))
+        if raw_sido.strip(DITTO_CHARS):
+            sido = raw_sido
+        if raw_sigungu.strip(DITTO_CHARS):
+            sigungu = raw_sigungu
+        if re.sub(r"\s+", "", sido) in CITY_IN_SIDO:
+            row_sido, prefix = CITY_IN_SIDO[re.sub(r"\s+", "", sido)]
+            row_sigungu = f"{prefix} {sigungu}".strip()
+        else:
+            row_sido, row_sigungu = normalize_sido(sido), sigungu
+        eupmyeon, dongri = text(cell(row, 4)), text(cell(row, 5))
+        year = number(cell(row, 7))
+        records.append({
+            "출처": source,
+            "시설코드": text(cell(row, 0)),
+            "시설명": name,
+            "시도": row_sido,
+            "시군구": row_sigungu,
+            "지번주소": " ".join(t for t in (row_sido, row_sigungu, eupmyeon, dongri) if t),
+            "관리기관": " ".join(t for t in (row_sido, row_sigungu) if t),
+            "유효저수량": number(cell(row, 11)),  # 천톤 = 천㎥
+            "수혜면적": number(cell(row, 9)),  # 몽리면적(ha)
+            "유역면적": number(cell(row, 8)),
+            "만수면적": number(cell(row, 12)),
+            "제당높이": number(cell(row, 14)),
+            "제당길이": number(cell(row, 15)),
+            "준공연도": str(int(year)) if year else pd.NA,
+        })
+    df = pd.DataFrame.from_records(records).reindex(columns=OUTPUT_COLUMNS)
+    return df.drop_duplicates()
+
+
 def merge_sources(frames: list[pd.DataFrame]) -> pd.DataFrame:
-    """같은 시도·시군구·시설명은 먼저 들어온 출처(농어촌공사)를 남긴다."""
-    merged = pd.concat(frames, ignore_index=True)
-    key = (merged["시도"].fillna("") + "|" + merged["시군구"].fillna("") + "|"
-           + merged["시설명"].str.replace(r"\s+", "", regex=True))
-    merged = merged[~key.duplicated()]
-    return merged.sort_values(["시도", "시군구", "시설명"]).reset_index(drop=True)
+    """다른 출처에 이미 있는 저수지(시도·시군구·시설명 일치)는 앞 출처의 것만 남긴다.
+
+    같은 출처 안에서는 이름이 같아도 서로 다른 저수지일 수 있어 그대로 둔다.
+    """
+    kept: list[pd.DataFrame] = []
+    seen: set[str] = set()
+    for frame in frames:
+        key = (frame["시도"].fillna("") + "|" + frame["시군구"].fillna("") + "|"
+               + frame["시설명"].str.replace(r"\s+", "", regex=True))
+        kept.append(frame[~key.isin(seen)])
+        seen.update(key)
+    merged = pd.concat(kept, ignore_index=True)
+    return merged.sort_values(["시도", "시군구", "시설명"], kind="stable").reset_index(drop=True)
 
 
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
@@ -182,13 +268,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="한국농어촌공사 저수지 시설제원 파일 (CSV/XLSX)")
     parser.add_argument("--std", nargs="*", default=[], type=Path,
                         help="전국저수지및댐표준데이터 파일 (CSV/XLSX)")
+    parser.add_argument("--small", nargs="*", default=[], type=Path,
+                        help="전국 시군구 관리 소규모 저수지 현황 엑셀 (.xls)")
     parser.add_argument("--out-dir", default=Path("data"), type=Path)
     args = parser.parse_args(argv)
 
     frames = [standardize(read_table(p), "한국농어촌공사") for p in args.krc]
     frames += [standardize(read_table(p), "지방자치단체") for p in args.std]
+    frames += [read_small_reservoir_xls(p) for p in args.small]
     if not frames:
-        parser.error("--krc 또는 --std 로 원본 파일을 하나 이상 지정하세요.")
+        parser.error("--krc, --std, --small 로 원본 파일을 하나 이상 지정하세요.")
 
     result = merge_sources(frames)
     args.out_dir.mkdir(parents=True, exist_ok=True)
