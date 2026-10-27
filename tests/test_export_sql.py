@@ -38,6 +38,24 @@ class ExportSqlTest(unittest.TestCase):
         sql = export_sql.build_sql(big, "postgresql")
         self.assertEqual(sql.count("INSERT INTO"), 3)  # 1200행 / 500
 
+    def test_supabase_files_split_data_and_enable_rls(self):
+        big = pd.concat([DF] * 2000, ignore_index=True)  # 4000행 -> 데이터 파일 2개
+        files = export_sql.build_supabase_files(big)
+        self.assertEqual(sorted(files), ["01_schema.sql", "02_data_1.sql", "02_data_2.sql", "all.sql"])
+        schema = files["01_schema.sql"]
+        self.assertIn("GENERATED ALWAYS AS IDENTITY", schema)
+        self.assertIn("ENABLE ROW LEVEL SECURITY", schema)
+        self.assertIn("FOR SELECT TO anon, authenticated USING (true)", schema)
+        self.assertLess(schema.index("DROP VIEW"), schema.index("DROP TABLE"))
+        self.assertEqual(files["02_data_1.sql"].count("INSERT INTO"), 6)  # 3000행 / 500
+        self.assertEqual(files["02_data_2.sql"].count("INSERT INTO"), 2)
+        self.assertEqual(files["all.sql"], "".join(files[k] for k in sorted(files) if k != "all.sql"))
+
+    def test_supabase_csv_uses_db_column_names(self):
+        csv = export_sql.supabase_csv(DF)
+        self.assertEqual(list(csv.columns), [col for col, *_ in export_sql.COLUMNS])
+        self.assertEqual(csv["name"].tolist(), ["가나", "다'라"])
+
 
 if __name__ == "__main__":
     unittest.main()

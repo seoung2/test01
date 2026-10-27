@@ -7,8 +7,15 @@ reservoirs 테이블이 새로 만들어진다. 이미 있으면 지우고 다�
     python scripts/export_sql.py --dialect mysql      > sql/reservoirs_mysql.sql
     python scripts/export_sql.py --dialect postgresql --out sql/reservoirs_postgresql.sql
     python scripts/export_sql.py --dialect sqlite     --out sql/reservoirs_sqlite.sql
+    python scripts/export_sql.py --dialect supabase   --out-dir sql/supabase
 
-지원 DB: mysql(MySQL 5.7+/MariaDB 10.2+), postgresql(12+), sqlite(3)
+지원 DB: mysql(MySQL 5.7+/MariaDB 10.2+), postgresql(12+), sqlite(3), supabase
+
+supabase 는 PostgreSQL 스크립트에 아래를 더하고, SQL Editor 에 붙여넣기 좋게 파일을 나눈다.
+  * RLS 를 켜고 누구나(anon) 읽기만 할 수 있는 정책 -> 홈페이지에서 공개 키로 바로 조회 가능
+  * 이름 부분검색용 pg_trgm 인덱스, 시도·시군구별 개수 뷰(reservoir_region_counts)
+  * 01_schema.sql, 02_data_1.sql ... (SUPABASE_ROWS_PER_FILE 행씩), 전체를 합친 all.sql,
+    Table Editor 의 CSV 가져오기용 reservoirs.csv(영문 헤더)
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ import pandas as pd
 
 TABLE = "reservoirs"
 BATCH_SIZE = 500  # INSERT 한 문장에 넣을 행 수
+SUPABASE_ROWS_PER_FILE = 3000  # SQL Editor 한 번에 실행하기 무리 없는 크기(약 0.6MB)
 
 # (DB 컬럼명, CSV 컬럼명, 타입, 설명). 타입은 세 DB 에서 모두 쓰는 표준 타입만 쓴다.
 COLUMNS = [
@@ -51,7 +59,9 @@ ID_COLUMN = {
     "mysql": "id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY",
     "postgresql": "id SERIAL PRIMARY KEY",
     "sqlite": "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "supabase": "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY",
 }
+POSTGRES_DIALECTS = ("postgresql", "supabase")
 INDEXES = [("idx_reservoirs_region", "sido, sigungu"), ("idx_reservoirs_name", "name")]
 
 
@@ -82,12 +92,40 @@ def create_table(dialect: str) -> list[str]:
                f" COMMENT={quote('전국 저수지 목록', dialect)}" if dialect == "mysql" else "")
     sql = [f"DROP TABLE IF EXISTS {TABLE};",
            f"CREATE TABLE {TABLE} (\n" + ",\n".join(lines) + f"\n){options};"]
-    if dialect == "postgresql":
+    if dialect in POSTGRES_DIALECTS:
         sql.append(f"COMMENT ON TABLE {TABLE} IS {quote('전국 저수지 목록', dialect)};")
         sql += [f"COMMENT ON COLUMN {TABLE}.{col} IS {quote(comment, dialect)};"
                 for col, _, _, comment in COLUMNS]
     sql += [f"CREATE INDEX {name} ON {TABLE} ({cols});" for name, cols in INDEXES]
+    if dialect == "supabase":
+        sql += [
+            "",
+            "-- 이름·주소 부분검색(ILIKE '%동막%')을 빠르게",
+            "CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;",
+            f"CREATE INDEX idx_reservoirs_name_trgm ON {TABLE} USING gin (name extensions.gin_trgm_ops);",
+            "",
+            "-- 누구나 읽기만 가능 (쓰기 정책이 없으므로 anon/authenticated 키로는 수정 불가)",
+            f"ALTER TABLE {TABLE} ENABLE ROW LEVEL SECURITY;",
+            f'CREATE POLICY "reservoirs are readable by everyone" ON {TABLE}',
+            "  FOR SELECT TO anon, authenticated USING (true);",
+            f"GRANT SELECT ON {TABLE} TO anon, authenticated;",
+            "",
+            "-- 시도·시군구 선택 목록용 개수 (security_invoker: 조회하는 사람의 권한·RLS 적용)",
+            "CREATE VIEW reservoir_region_counts WITH (security_invoker = true) AS",
+            f"  SELECT sido, sigungu, count(*) AS reservoir_count FROM {TABLE}",
+            "  GROUP BY sido, sigungu;",
+            "GRANT SELECT ON reservoir_region_counts TO anon, authenticated;",
+        ]
     return sql
+
+
+def insert_statements(df: pd.DataFrame, dialect: str) -> list[str]:
+    names = ", ".join(col for col, *_ in COLUMNS)
+    records = df.reindex(columns=[csv_col for _, csv_col, _, _ in COLUMNS]).itertuples(index=False)
+    values = ["(" + ", ".join(literal(v, t, dialect) for v, (_, _, t, _) in zip(row, COLUMNS)) + ")"
+              for row in records]
+    return [f"INSERT INTO {TABLE} ({names}) VALUES\n" + ",\n".join(values[i:i + BATCH_SIZE]) + ";"
+            for i in range(0, len(values), BATCH_SIZE)]
 
 
 def build_sql(df: pd.DataFrame, dialect: str) -> str:
@@ -100,16 +138,35 @@ def build_sql(df: pd.DataFrame, dialect: str) -> str:
         header.append("SET NAMES utf8mb4;")
     sql = header + create_table(dialect)
     sql.append("START TRANSACTION;" if dialect == "mysql" else "BEGIN;")
-
-    names = ", ".join(col for col, *_ in COLUMNS)
-    records = df.reindex(columns=[csv_col for _, csv_col, _, _ in COLUMNS]).itertuples(index=False)
-    values = ["(" + ", ".join(literal(v, t, dialect) for v, (_, _, t, _) in zip(row, COLUMNS)) + ")"
-              for row in records]
-    for start in range(0, len(values), BATCH_SIZE):
-        chunk = ",\n".join(values[start:start + BATCH_SIZE])
-        sql.append(f"INSERT INTO {TABLE} ({names}) VALUES\n{chunk};")
+    sql += insert_statements(df, dialect)
     sql.append("COMMIT;")
     return "\n".join(sql) + "\n"
+
+
+def build_supabase_files(df: pd.DataFrame) -> dict[str, str]:
+    """Supabase SQL Editor 에서 순서대로 실행할 파일들 {파일명: 내용}."""
+    parts = -(-len(df) // SUPABASE_ROWS_PER_FILE)
+    files = {"01_schema.sql": "\n".join([
+        "-- 전국 저수지 목록: Supabase 테이블 만들기 (scripts/export_sql.py 로 생성)",
+        f"-- 1) 이 파일 -> 2) 02_data_1.sql ~ 02_data_{parts}.sql 순서로 SQL Editor 에서 실행하세요.",
+        f"-- 주의: {TABLE} 테이블이 이미 있으면 지우고 새로 만듭니다.",
+        f"DROP VIEW IF EXISTS reservoir_region_counts;",
+        *create_table("supabase"),
+    ]) + "\n"}
+    for n in range(parts):
+        chunk = df.iloc[n * SUPABASE_ROWS_PER_FILE:(n + 1) * SUPABASE_ROWS_PER_FILE]
+        files[f"02_data_{n + 1}.sql"] = "\n".join([
+            f"-- 전국 저수지 목록 데이터 {n + 1}/{parts} ({len(chunk):,}행). 01_schema.sql 을 먼저 실행하세요.",
+            "BEGIN;", *insert_statements(chunk, "supabase"), "COMMIT;",
+        ]) + "\n"
+    files["all.sql"] = "".join(files[name] for name in sorted(files))
+    return files
+
+
+def supabase_csv(df: pd.DataFrame) -> pd.DataFrame:
+    """Table Editor 의 CSV 가져오기용: 헤더를 DB 컬럼명으로 바꾼 표."""
+    return df.reindex(columns=[c for _, c, _, _ in COLUMNS]).set_axis(
+        [col for col, *_ in COLUMNS], axis=1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -118,9 +175,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--csv", default=Path("data/reservoirs.csv"), type=Path)
     parser.add_argument("--dialect", choices=sorted(ID_COLUMN), default="mysql")
     parser.add_argument("--out", type=Path, help="저장할 파일 (생략하면 화면에 출력)")
+    parser.add_argument("--out-dir", type=Path, default=Path("sql/supabase"),
+                        help="supabase 파일들을 저장할 폴더")
     args = parser.parse_args(argv)
 
     df = pd.read_csv(args.csv, dtype=str, encoding="utf-8-sig")
+    if args.dialect == "supabase":
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        for name, content in build_supabase_files(df).items():
+            (args.out_dir / name).write_text(content, encoding="utf-8")
+        supabase_csv(df).to_csv(args.out_dir / "reservoirs.csv", index=False, encoding="utf-8")
+        print(f"저수지 {len(df):,}개 -> {args.out_dir}/", file=sys.stderr)
+        return 0
     sql = build_sql(df, args.dialect)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

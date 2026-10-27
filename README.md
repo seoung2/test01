@@ -78,6 +78,44 @@ phpMyAdmin을 쓰는 호스팅(카페24, 가비아 등)은 **가져오기** 메�
 
 목록을 갱신했으면 `python scripts/export_sql.py --dialect mysql --out sql/reservoirs_mysql.sql`로 다시 만듭니다.
 
+### 방법 3. Supabase
+
+`sql/supabase/` 폴더에 Supabase용 파일이 있습니다. 둘 중 한 가지 방법으로 올립니다.
+
+**A. SQL Editor (권장)** — Supabase 대시보드 → **SQL Editor** → **New query** 에 파일 내용을 붙여넣고 **Run**을 누릅니다.
+아래 순서대로 실행하세요.
+
+1. `01_schema.sql`: 테이블·인덱스·권한·뷰 만들기 (`reservoirs` 테이블이 이미 있으면 지우고 새로 만듦)
+2. `02_data_1.sql` → `02_data_2.sql` → … → `02_data_5.sql`: 데이터 입력 (파일당 3,000행, 약 0.6MB)
+
+`psql`을 쓸 수 있으면 한 번에 실행해도 됩니다: `psql "<Supabase 연결 문자열>" -f sql/supabase/all.sql`
+(연결 문자열은 대시보드의 **Connect** 버튼에 있습니다.)
+
+**B. Table Editor CSV 가져오기** — `01_schema.sql`만 SQL Editor에서 실행한 뒤,
+**Table Editor** → `reservoirs` → **Insert** → **Import data from CSV**로 `sql/supabase/reservoirs.csv`(헤더가 DB 컬럼명)를 올립니다.
+
+`01_schema.sql`이 만드는 것:
+
+- `reservoirs` 테이블 (컬럼은 위 방법 2의 표와 같음, `id`는 자동 증가)
+- **RLS(행 수준 보안) + 읽기 전용 공개 정책**: 공개 키(anon key)로는 조회만 되고 추가·수정·삭제는 막힙니다.
+  데이터 수정은 대시보드나 service_role 키로만 할 수 있습니다.
+- 인덱스: `(sido, sigungu)`, `name`, 이름 부분검색용 `pg_trgm` 인덱스 (3글자 이상 검색에 적용)
+- `reservoir_region_counts` 뷰: 시도·시군구별 저수지 개수 (선택 목록 만들 때 사용)
+
+홈페이지에서 조회하는 예 (supabase-js):
+
+```js
+const { data } = await supabase
+  .from("reservoirs")
+  .select("name, sido, sigungu, address, effective_storage")
+  .eq("sido", "경상북도")
+  .ilike("name", "%저수지%")
+  .order("effective_storage", { ascending: false })
+  .range(0, 49);   // 한 번에 최대 1,000행이 기본 한도이므로 페이지로 나눠 받습니다
+```
+
+목록을 갱신했으면 `python scripts/export_sql.py --dialect supabase`로 다시 만듭니다.
+
 ## 원본 데이터
 
 공공데이터포털의 원본 파일을 합쳐 전국 농업용 저수지 목록(CSV/엑셀)을 만듭니다.
