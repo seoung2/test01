@@ -69,7 +69,7 @@ class BuildReservoirListTest(unittest.TestCase):
             [],
             ["가상", 3],  # 시도 소계 행
             [1, "가나", "경북", "가상", "가면", "가리", 1960, 1961, 10, 2, "", 1.5, 0.4, 90, 3, 50],
-            [2, "가나", '"', "〃", "나면", "나리", "", 1945, 5, 1, "", 0.5, 0.2],
+            [2, "가나", '"', "〃", '"', "나리", "", 1945, 5, 1, "", 0.5, 0.2],
             [3, "다라", "포항시", "북구", "다면", "다리", "", "", 7, 1, "", 0.7],
             ["소계", 3],
         ]
@@ -85,7 +85,7 @@ class BuildReservoirListTest(unittest.TestCase):
         self.assertEqual(list(df["시설명"]), ["가나", "가나", "다라"])
         self.assertEqual(list(df["시도"]), ["경상북도"] * 3)
         self.assertEqual(list(df["시군구"]), ["가상", "가상", "포항시 북구"])
-        self.assertEqual(df["지번주소"].iloc[1], "경상북도 가상 나면 나리")
+        self.assertEqual(df["지번주소"].iloc[1], "경상북도 가상 가면 나리")
         self.assertEqual(df["유효저수량"].iloc[0], 1.5)
         self.assertEqual(df["준공연도"].iloc[0], "1961")
         self.assertTrue(pd.isna(df["준공연도"].iloc[2]))

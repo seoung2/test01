@@ -203,7 +203,7 @@ def read_small_reservoir_xls(path: Path, source: str = "시군구(소규모)") -
         return "" if value is None else str(value).strip()
 
     records = []
-    sido = sigungu = ""
+    sido = sigungu = prev_eupmyeon = prev_dongri = ""
     for row in range(4, sheet.nrows):
         name = cell(row, 1)
         if not isinstance(name, str) or not name:
@@ -218,7 +218,13 @@ def read_small_reservoir_xls(path: Path, source: str = "시군구(소규모)") -
             row_sigungu = f"{prefix} {sigungu}".strip()
         else:
             row_sido, row_sigungu = normalize_sido(sido), sigungu
+        # 읍면·동리는 빈칸이 정상일 수 있어(동 지역) 반복 기호가 있을 때만 윗행 값을 쓴다
         eupmyeon, dongri = text(cell(row, 4)), text(cell(row, 5))
+        if eupmyeon and not eupmyeon.strip(DITTO_CHARS):
+            eupmyeon = prev_eupmyeon
+        if dongri and not dongri.strip(DITTO_CHARS):
+            dongri = prev_dongri
+        prev_eupmyeon, prev_dongri = eupmyeon, dongri
         year = number(cell(row, 7))
         records.append({
             "출처": source,
