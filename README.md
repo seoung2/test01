@@ -116,6 +116,25 @@ const { data } = await supabase
 
 목록을 갱신했으면 `python scripts/export_sql.py --dialect supabase`로 다시 만듭니다.
 
+## 방문자용 홈페이지 (Supabase 연결)
+
+저장소 맨 위의 `index.html`, `style.css`, `script.js`가 방문자 화면입니다. Supabase의 `reservoirs` 테이블을
+브라우저에서 바로 읽습니다(별도 서버 불필요).
+
+- 이름·소재지 검색, 시도 → 시군구 선택(시군구 옆에 저수지 개수), 정렬(이름, 저수량, 수혜면적, 제당 높이, 준공연도), 50개씩 페이지
+- 행을 누르면 모든 제원을 보여주는 상세 창
+- 검색 조건이 주소에 남아(`?sido=충청남도&q=간월`) 링크로 공유할 수 있음
+- 휴대폰에서는 카드 목록으로 바뀌고, 어두운 화면 모드도 지원
+
+**먼저 할 일:** 위 "방법 3. Supabase"의 SQL을 Supabase에서 실행해 테이블을 만들어야 합니다.
+테이블이 없으면 화면에 그 안내가 나옵니다.
+
+Supabase 주소와 공개 키는 `script.js` 맨 위의 `SUPABASE_URL`, `SUPABASE_KEY`에 있습니다. 공개(publishable) 키는
+브라우저에 노출돼도 되는 키이며, RLS 정책 때문에 이 키로는 읽기만 됩니다. **service_role / secret 키는 절대 넣지 마세요.**
+
+배포: 세 파일을 아무 정적 호스팅에 올리면 됩니다. GitHub Pages라면 저장소 **Settings → Pages**에서
+브랜치와 `/ (root)` 폴더를 고르면 됩니다. 로컬 확인은 `python -m http.server` 후 http://localhost:8000.
+
 ## 원본 데이터
 
 공공데이터포털의 원본 파일을 합쳐 전국 농업용 저수지 목록(CSV/엑셀)을 만듭니다.

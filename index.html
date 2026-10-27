@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>전국 저수지 찾기</title>
+  <meta name="description" content="전국 시군구 관리 저수지를 이름·지역으로 검색하고 제원을 확인합니다.">
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <h1>전국 저수지 찾기</h1>
+      <p class="lede">저수지 이름이나 지역으로 검색하고, 저수량·제당 규모 같은 제원을 확인하세요.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <form class="filters" id="filters" role="search">
+      <label class="field field-search">
+        <span class="field-label">검색</span>
+        <input type="search" id="q" name="q" placeholder="저수지 이름 또는 소재지 (예: 동막, 구미시)" autocomplete="off">
+      </label>
+      <label class="field">
+        <span class="field-label">시도</span>
+        <select id="sido" name="sido"><option value="">전체</option></select>
+      </label>
+      <label class="field">
+        <span class="field-label">시군구</span>
+        <select id="sigungu" name="sigungu" disabled><option value="">전체</option></select>
+      </label>
+      <label class="field">
+        <span class="field-label">정렬</span>
+        <select id="sort" name="sort">
+          <option value="name">이름순</option>
+          <option value="storage">유효저수량 큰 순</option>
+          <option value="area">수혜면적 넓은 순</option>
+          <option value="height">제당 높은 순</option>
+          <option value="newest">최근 준공 순</option>
+          <option value="oldest">오래된 순</option>
+        </select>
+      </label>
+      <button type="button" class="button-reset" id="reset">초기화</button>
+    </form>
+
+    <p class="status" id="status" role="status" aria-live="polite">불러오는 중…</p>
+
+    <div class="table-wrap">
+      <table class="results" id="results">
+        <thead>
+          <tr>
+            <th scope="col">시설명</th>
+            <th scope="col">소재지</th>
+            <th scope="col" class="num">유효저수량<br><small>천㎥</small></th>
+            <th scope="col" class="num">수혜면적<br><small>ha</small></th>
+            <th scope="col" class="num">제당 높이<br><small>m</small></th>
+            <th scope="col" class="num">준공</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <nav class="pager" id="pager" aria-label="페이지">
+      <button type="button" id="prev">‹ 이전</button>
+      <span id="page-info"></span>
+      <button type="button" id="next">다음 ›</button>
+    </nav>
+  </main>
+
+  <dialog class="detail" id="detail" aria-labelledby="detail-title">
+    <form method="dialog">
+      <header class="detail-head">
+        <h2 id="detail-title"></h2>
+        <button class="detail-close" aria-label="닫기">✕</button>
+      </header>
+      <dl class="detail-list" id="detail-list"></dl>
+    </form>
+  </dialog>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      자료: 전국 시군구 관리 소규모 저수지 현황(2007년경 작성). 행정구역·제원은 작성 당시 기준이며 현재와 다를 수 있습니다.
+    </div>
+  </footer>
+</body>
+</html>

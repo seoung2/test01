@@ -203,11 +203,16 @@ def read_small_reservoir_xls(path: Path, source: str = "시군구(소규모)") -
         return "" if value is None else str(value).strip()
 
     records = []
-    sido = sigungu = prev_eupmyeon = prev_dongri = ""
+    sido = sigungu = prev_name = prev_eupmyeon = prev_dongri = ""
     for row in range(4, sheet.nrows):
         name = cell(row, 1)
         if not isinstance(name, str) or not name:
             continue  # 소계(시설명 칸이 숫자)·빈 행
+        # '가 재', '연  화2' 처럼 글자 사이에 넣은 공백을 없애고, '〃' 는 윗행 이름으로
+        name = re.sub(r"\s+", "", name)
+        if not name.strip(DITTO_CHARS):
+            name = prev_name
+        prev_name = name
         raw_sido, raw_sigungu = text(cell(row, 2)), text(cell(row, 3))
         if raw_sido.strip(DITTO_CHARS):
             sido = raw_sido
